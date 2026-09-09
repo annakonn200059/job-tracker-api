@@ -1,0 +1,1 @@
+package vacancies_models

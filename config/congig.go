@@ -1,0 +1,86 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+)
+
+type Config struct {
+	DatabaseURL  string
+	HTTPPort     string
+	LogLevel     string
+	ShutdownWait time.Duration
+
+	DBMaxConns        int32
+	DBMinConns        int32
+	DBMaxConnLifetime time.Duration
+	DBMaxConnIdleTime time.Duration
+	DBConnectTimeout  time.Duration
+}
+
+func Load() (*Config, error) {
+	c := &Config{
+		DatabaseURL:  os.Getenv("DATABASE_URL"),
+		HTTPPort:     envOr("HTTP_PORT", "8080"),
+		LogLevel:     envOr("LOG_LEVEL", "info"),
+		ShutdownWait: envDuration("SHUTDOWN_WAIT", 15*time.Second),
+
+		DBMaxConns:        envInt32("DB_MAX_CONNS", 10),
+		DBMinConns:        envInt32("DB_MIN_CONNS", 0),
+		DBMaxConnLifetime: envDuration("DB_MAX_CONN_LIFETIME", time.Hour),
+		DBMaxConnIdleTime: envDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
+		DBConnectTimeout:  envDuration("DB_CONNECT_TIMEOUT", 5*time.Second),
+	}
+
+	return c, c.validate()
+}
+
+func (c *Config) validate() error {
+	if c.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if c.DBMaxConns < 1 {
+		return fmt.Errorf("DB_MAX_CONNS must be at least 1, got %d", c.DBMaxConns)
+	}
+	if c.DBMinConns > c.DBMaxConns {
+		return fmt.Errorf("DB_MIN_CONNS (%d) exceeds DB_MAX_CONNS (%d)",
+			c.DBMinConns, c.DBMaxConns)
+	}
+	if _, err := strconv.Atoi(c.HTTPPort); err != nil {
+		return fmt.Errorf("HTTP_PORT must be numeric, got %q", c.HTTPPort)
+	}
+	return nil
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envInt32(key string, def int32) int32 {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return def
+	}
+	return int32(n)
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return def
+	}
+	return d
+}
