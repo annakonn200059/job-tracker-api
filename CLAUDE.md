@@ -8,9 +8,10 @@ A Go REST API backend for tracking job applications (companies, vacancies, appli
 Kanban-style pipeline, a timeline of events per application, contacts, tags). Module path:
 `github.com/annakonn200059/job-tracker-api`. Postgres via `pgx/v5`, migrations via `goose`.
 
-The project is early-stage: `cmd/api/main.go` currently only wires up `/healthz` and `/readyz`; no domain HTTP
-routes are mounted yet, and `vacancies_repo` is constructed in `main.go` but not yet passed to any handler. Don't
-assume a full REST surface exists — check `http/` and `cmd/api/main.go` before referencing routes.
+The project is early-stage. `cmd/api/main.go` wires up `/healthz`, `/readyz`, and the `applications`/`vacancies`
+routes; `events`, `companies`, `contacts`, and `tags` have no HTTP surface yet (events/companies only have repos,
+no service; contacts/tags have neither). Check `api/`, `services/`, and `cmd/api/main.go` before assuming a route
+or service method exists.
 
 ## Commands
 
@@ -47,8 +48,9 @@ dev (`HTTP_PORT`, `LOG_LEVEL`, and pool tuning vars `DB_MAX_CONNS`, `DB_MIN_CONN
 Layering, outer to inner:
 
 ```
-cmd/api          composition root: loads config, opens the pool, wires repos/services, starts http.Server
-http/            HTTP-facing helpers (currently just error-response mapping; no domain handlers yet)
+cmd/api          composition root: loads config, opens the pool, wires repos/services/handlers, starts http.Server
+api/<name>       HTTP handlers, one package per aggregate — decode request, call the service, encode response
+http/            shared HTTP-facing helpers used by every api/<name> package (see below)
 services/<name>  business logic, transaction boundaries, orchestration across repos
 repos/<name>     SQL, one package per aggregate, talk to Postgres via pgx
 domains/<name>   pure Go types/enums/validation — no I/O, imported by every other layer
@@ -56,15 +58,37 @@ internal/infrastructure/database   connection pool + the DBTX abstraction + InTx
 ```
 
 Package naming convention: domain packages are `<name>_models` (import alias e.g. `applications_models`,
-`vacancies_models`, `events_models`, `errors_models`), repo packages are `<name>_repo`
-(`applications_repo`, `events_repo`, `vacancies_repo`), service packages are `<name>_service`. Follow this even
-though `vacancies_repo` currently deviates from the newer pattern (see below) — align it, don't copy it.
+`vacancies_models`, `events_models`, `errors_models`, `companies_models`), repo packages are `<name>_repo`
+(`applications_repo`, `events_repo`, `vacancies_repo`, `companies_repo`), service packages are `<name>_service`,
+and HTTP handler packages under `api/` are `<name>_api` (`applications_api`, `vacancies_api`) — each exposes a
+`Handler` with a `NewHandler(svc)` constructor and a `Register(mux *http.ServeMux)` method that `main.go` calls.
 
-**`applications` is the reference implementation for this layering; `vacancies` is not yet caught up.**
-`applications_repo.Repo` and `events_repo.Repo` depend on `database.DBTX` (satisfied by both `*pgxpool.Pool` and
-`pgx.Tx`) and expose `WithTx(tx)` so a service can rebind a repo into an in-flight transaction. `vacancies_repo`
-still takes a concrete `*pgxpool.Pool` and has no `WithTx`/transaction support — when extending vacancies, prefer
-bringing it in line with the `applications`/`events` pattern over building on top of the pool-only version.
+`applications_repo.Repo`, `events_repo.Repo`, `vacancies_repo.Repo`, and `companies_repo.Repo` all depend on
+`database.DBTX` (satisfied by both `*pgxpool.Pool` and `pgx.Tx`) and expose `WithTx(tx)` so a service can rebind a
+repo into an in-flight transaction — this is the pattern to follow for any new repo.
+
+### HTTP layer (`api/`, `http/`)
+
+Routing uses the standard library's Go 1.22+ `http.ServeMux` pattern syntax directly (`"GET /vacancies/{id}"`) —
+no router dependency. Each `api/<name>` package defines its own request/response DTOs (never reuses a `domains/*`
+struct for JSON, to keep the domain layer free of encoding concerns) and converts to/from the service's domain
+types.
+
+The `http` package (note: package name `http`, so other packages must import it under an alias, e.g.
+`apihttp "github.com/annakonn200059/job-tracker-api/http"`, to avoid colliding with `net/http`) provides the
+helpers every handler uses: `WriteError` (maps an error to a status/JSON body — see below), `WriteJSON`,
+`DecodeJSON` (rejects unknown fields, caps body size), `UserID`, `PathID`, and the `Query*`/`QueryCSV*` family for
+parsing filters. Add new query/body parsing helpers here rather than duplicating them per handler package.
+
+**`http.UserID` is a placeholder, not auth.** It reads the caller's ID straight from an `X-User-ID` header with no
+verification — there is no authentication/session layer in this codebase yet. Do not treat it as an authorization
+boundary; if real auth is added, this is the one place that needs to change for every handler to pick it up.
+
+**Every domain-specific sentinel error needs an entry in `http.WriteError`'s switch, or it silently becomes a
+500.** Repos translate Postgres constraint violations into distinct sentinel values per domain package (e.g.
+`applications_models.ErrInvalidStage`, `vacancies_models.ErrHasActiveApplication`) rather than wrapping the
+shared `errors_models.ErrValidation`/`ErrConflict`, so `errors.Is` against the generic sentinels alone won't catch
+them. When a new domain error is introduced, add it to the relevant status-code case in `http/errors.go`.
 
 ### Multi-tenancy
 
@@ -98,7 +122,10 @@ handling raw pg errors in services or handlers.
 panic (see `internal/infrastructure/database/db.go`). Services call it and rebind each repo they need via
 `repo.WithTx(tx)` inside the closure — see `applications_service.Service.ChangeStage` and `MoveCard` for the
 pattern (lock the row with `GetByIDForUpdate`, mutate, write a corresponding `application_events` row, all in one
-tx so the audit log can't desync from the pipeline state).
+tx so the audit log can't desync from the pipeline state). `vacancies_service.Service.Create` uses the same
+pattern for a lighter case: resolving `CreateParams.CompanyName` to a company row via
+`companies_repo.GetOrCreateByName` (an upsert against the partial unique index on `(user_id, name)`) and inserting
+the vacancy happen in one transaction, so a failed vacancy insert can't leave things inconsistent.
 
 ### Kanban ordering (`applications_service`)
 

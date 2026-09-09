@@ -8,9 +8,17 @@ import (
 	"os"
 	"time"
 
+	applications_api "github.com/annakonn200059/job-tracker-api/api/applications"
+	vacancies_api "github.com/annakonn200059/job-tracker-api/api/vacancies"
 	"github.com/annakonn200059/job-tracker-api/config"
+	apihttp "github.com/annakonn200059/job-tracker-api/http"
 	"github.com/annakonn200059/job-tracker-api/internal/infrastructure/database"
+	applications_repo "github.com/annakonn200059/job-tracker-api/repos/applications"
+	companies_repo "github.com/annakonn200059/job-tracker-api/repos/companies"
+	events_repo "github.com/annakonn200059/job-tracker-api/repos/events"
 	vacancies_repo "github.com/annakonn200059/job-tracker-api/repos/vacancies"
+	applications_service "github.com/annakonn200059/job-tracker-api/services/applications"
+	vacancies_service "github.com/annakonn200059/job-tracker-api/services/vacancies"
 )
 
 func main() {
@@ -47,10 +55,18 @@ func run() error {
 	defer pool.Close()
 	logger.Info("database connected", "max_conns", cfg.DBMaxConns)
 
-	vacancyRepo := vacancies_repo.NewVacancyRepo(pool)
-	_ = vacancyRepo
+	appsRepo := applications_repo.NewRepo(pool)
+	eventsRepo := events_repo.NewRepo(pool)
+	vacanciesRepo := vacancies_repo.NewRepo(pool)
+	companiesRepo := companies_repo.NewRepo(pool)
+
+	appsService := applications_service.NewService(pool, appsRepo, eventsRepo)
+	vacanciesService := vacancies_service.NewVacanciesService(pool, vacanciesRepo, companiesRepo)
 
 	mux := http.NewServeMux()
+
+	applications_api.NewHandler(appsService).Register(mux)
+	vacancies_api.NewHandler(vacanciesService).Register(mux)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -69,7 +85,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
-		Handler:           mux,
+		Handler:           apihttp.Logging(logger, mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

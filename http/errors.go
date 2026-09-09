@@ -6,7 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 
+	applications_models "github.com/annakonn200059/job-tracker-api/domains/applications"
+	companies_models "github.com/annakonn200059/job-tracker-api/domains/companies"
 	errors_models "github.com/annakonn200059/job-tracker-api/domains/errors"
+	vacancies_models "github.com/annakonn200059/job-tracker-api/domains/vacancies"
 )
 
 type errorBody struct {
@@ -14,15 +17,38 @@ type errorBody struct {
 	Message string `json:"message"`
 }
 
-func writeError(w http.ResponseWriter, r *http.Request, err error) {
+// WriteError maps an error returned by a service/repo to an HTTP status and
+// writes it as JSON. Repos translate Postgres constraint violations into
+// domain sentinels (e.g. applications_models.ErrInvalidStage), and those
+// sentinels are distinct error values, not wrapped copies of
+// errors_models.ErrValidation/ErrConflict — so each one needs its own entry
+// below, or it silently falls through to 500.
+func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code := http.StatusInternalServerError, "internal_error"
 
 	switch {
 	case errors.Is(err, errors_models.ErrNotFound):
 		status, code = http.StatusNotFound, "not_found"
-	case errors.Is(err, errors_models.ErrConflict):
+
+	case errors.Is(err, errors_models.ErrForbidden):
+		status, code = http.StatusForbidden, "forbidden"
+
+	case errors.Is(err, errors_models.ErrConflict),
+		errors.Is(err, applications_models.ErrAlreadyApplied),
+		errors.Is(err, applications_models.ErrSameStage),
+		errors.Is(err, vacancies_models.ErrHasActiveApplication):
 		status, code = http.StatusConflict, "conflict"
-	case errors.Is(err, errors_models.ErrValidation):
+
+	case errors.Is(err, errors_models.ErrValidation),
+		errors.Is(err, applications_models.ErrInvalidStage),
+		errors.Is(err, applications_models.ErrInvalidSort),
+		errors.Is(err, vacancies_models.ErrTitleRequired),
+		errors.Is(err, vacancies_models.ErrInvalidWorkMode),
+		errors.Is(err, vacancies_models.ErrInvalidEmploymentType),
+		errors.Is(err, vacancies_models.ErrInvalidSalaryPeriod),
+		errors.Is(err, vacancies_models.ErrInvalidSalaryRange),
+		errors.Is(err, vacancies_models.ErrInvalidSort),
+		errors.Is(err, companies_models.ErrNameRequired):
 		status, code = http.StatusBadRequest, "validation_failed"
 	}
 

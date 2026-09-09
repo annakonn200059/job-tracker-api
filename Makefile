@@ -1,7 +1,9 @@
 -include .env
 export
 
-.PHONY: migrate-new migrate-up migrate-down migrate-status
+.PHONY: migrate-new migrate-up migrate-down migrate-status build run dev
+
+AIR := $(shell go env GOPATH)/bin/air
 
 migrate-new:
 	goose -dir migrations create $(name) sql
@@ -20,3 +22,6 @@ build:
 
 run: build
 	./bin/api
+
+dev:
+	$(AIR)
