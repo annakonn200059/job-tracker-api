@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	DatabaseURL  string
-	HTTPPort     string
-	LogLevel     string
-	ShutdownWait time.Duration
+	DatabaseURL     string
+	HTTPPort        string
+	LogLevel        string
+	ShutdownWait    time.Duration
+	PreShutdownWait time.Duration
 
 	DBMaxConns        int32
 	DBMinConns        int32
@@ -22,10 +23,11 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		DatabaseURL:  os.Getenv("DATABASE_URL"),
-		HTTPPort:     envOr("HTTP_PORT", "8080"),
-		LogLevel:     envOr("LOG_LEVEL", "info"),
-		ShutdownWait: envDuration("SHUTDOWN_WAIT", 15*time.Second),
+		DatabaseURL:     os.Getenv("DATABASE_URL"),
+		HTTPPort:        envOr("HTTP_PORT", "8080"),
+		LogLevel:        envOr("LOG_LEVEL", "info"),
+		ShutdownWait:    envDuration("SHUTDOWN_WAIT", 15*time.Second),
+		PreShutdownWait: envDuration("PRE_SHUTDOWN_WAIT", 5*time.Second),
 
 		DBMaxConns:        envInt32("DB_MAX_CONNS", 10),
 		DBMinConns:        envInt32("DB_MIN_CONNS", 0),

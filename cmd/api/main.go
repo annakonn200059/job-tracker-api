@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	applications_api "github.com/annakonn200059/job-tracker-api/api/applications"
@@ -39,7 +41,12 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
-	ctx := context.Background()
+	// Cancelled on SIGINT or SIGTERM. stop() restores default handling, so a
+	// second Ctrl-C kills the process outright instead of being swallowed —
+	// useful when shutdown itself hangs.
+	ctx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	pool, err := database.NewPool(ctx, database.PoolConfig{
 		DSN:             cfg.DatabaseURL,
@@ -68,20 +75,9 @@ func run() error {
 	applications_api.NewHandler(appsService).Register(mux)
 	vacancies_api.NewHandler(vacanciesService).Register(mux)
 
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := pool.Ping(ctx); err != nil {
-			logger.Warn("readiness failed", "err", err)
-			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
+	readiness := apihttp.NewReadiness()
+	mux.HandleFunc("GET /healthz", apihttp.LivenessHandler())
+	mux.HandleFunc("GET /readyz", apihttp.ReadinessHandler(readiness, pool, 2*time.Second))
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
@@ -92,10 +88,64 @@ func run() error {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	logger.Info("starting", "addr", srv.Addr, "log_level", cfg.LogLevel)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// Buffered: if shutdown completes before this goroutine ever sends, an
+	// unbuffered channel would leak the goroutine forever.
+	serverErr := make(chan error, 1)
+
+	go func() {
+		logger.Info("listening", "addr", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+	}()
+
+	select {
+	case err := <-serverErr:
+		// Failed before any signal arrived — a bound port, usually.
 		return err
+
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
 	}
+
+	// Step 1. Fail readiness. Kubernetes notices on its next probe and starts
+	// removing this pod from Service endpoints.
+	readiness.Unready()
+	logger.Info("readiness disabled", "wait", cfg.PreShutdownWait)
+
+	// Step 2. Wait for that removal to propagate. Endpoint updates are
+	// asynchronous: the endpoint controller updates the EndpointSlice, then
+	// kube-proxy rewrites iptables on every node. Draining immediately means
+	// traffic still arrives at a server that has stopped accepting it, and the
+	// client sees a connection error instead of a response.
+	//
+	// This sleep looks removable. It is not.
+	time.Sleep(cfg.PreShutdownWait)
+
+	// Step 3. Drain. context.Background(), NOT ctx — ctx is already cancelled,
+	// so Shutdown would return instantly having drained nothing, and the code
+	// would still look correct.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownWait)
+	defer cancel()
+
+	logger.Info("draining connections", "timeout", cfg.ShutdownWait)
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		// Requests outlived the grace period. In Kubernetes, SIGKILL follows
+		// shortly after terminationGracePeriodSeconds regardless.
+		logger.Warn("graceful shutdown timed out, forcing close", "err", err)
+		if closeErr := srv.Close(); closeErr != nil {
+			logger.Error("force close failed", "err", closeErr)
+		}
+	}
+
+	// Step 4. Release the pool. After Shutdown, so in-flight requests still
+	// had a working database.
+	pool.Close()
+
+	logger.Info("stopped cleanly")
 	return nil
 }
 
