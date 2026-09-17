@@ -113,7 +113,7 @@ func run() error {
 	// Step 1. Fail readiness. Kubernetes notices on its next probe and starts
 	// removing this pod from Service endpoints.
 	readiness.Unready()
-	logger.Info("readiness disabled", "wait", cfg.PreShutdownWait)
+	logger.Info("readiness disabled", "wait", cfg.PreShutdownWait.String())
 
 	// Step 2. Wait for that removal to propagate. Endpoint updates are
 	// asynchronous: the endpoint controller updates the EndpointSlice, then
@@ -130,7 +130,7 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownWait)
 	defer cancel()
 
-	logger.Info("draining connections", "timeout", cfg.ShutdownWait)
+	logger.Info("draining connections", "timeout", cfg.ShutdownWait.String())
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		// Requests outlived the grace period. In Kubernetes, SIGKILL follows
