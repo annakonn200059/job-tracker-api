@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,15 @@ type Config struct {
 	DBMaxConnLifetime time.Duration
 	DBMaxConnIdleTime time.Duration
 	DBConnectTimeout  time.Duration
+
+	SessionTTL         time.Duration
+	CookieSecure       bool
+	CookieDomain       string
+	CORSAllowedOrigins []string
+	// GoogleClientID enables POST /auth/google when set. It is the OAuth
+	// client ID the frontend's Google sign-in button uses; ID tokens issued
+	// for any other client are rejected.
+	GoogleClientID string
 }
 
 func Load() (*Config, error) {
@@ -34,6 +44,12 @@ func Load() (*Config, error) {
 		DBMaxConnLifetime: envDuration("DB_MAX_CONN_LIFETIME", time.Hour),
 		DBMaxConnIdleTime: envDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
 		DBConnectTimeout:  envDuration("DB_CONNECT_TIMEOUT", 5*time.Second),
+
+		SessionTTL:         envDuration("SESSION_TTL", 30*24*time.Hour),
+		CookieSecure:       envBool("COOKIE_SECURE", true),
+		CookieDomain:       os.Getenv("COOKIE_DOMAIN"),
+		CORSAllowedOrigins: envList("CORS_ALLOWED_ORIGINS"),
+		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 	}
 
 	return c, c.validate()
@@ -52,6 +68,9 @@ func (c *Config) validate() error {
 	}
 	if _, err := strconv.Atoi(c.HTTPPort); err != nil {
 		return fmt.Errorf("HTTP_PORT must be numeric, got %q", c.HTTPPort)
+	}
+	if c.SessionTTL <= 0 {
+		return fmt.Errorf("SESSION_TTL must be positive, got %s", c.SessionTTL)
 	}
 	return nil
 }
@@ -85,4 +104,27 @@ func envDuration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+func envBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
+}
+
+// envList parses a comma-separated list, dropping empty entries.
+func envList(key string) []string {
+	var out []string
+	for _, s := range strings.Split(os.Getenv(key), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

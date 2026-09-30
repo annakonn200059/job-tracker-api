@@ -8,7 +8,7 @@ A Go REST API backend for tracking job applications (companies, vacancies, appli
 Kanban-style pipeline, a timeline of events per application, contacts, tags). Module path:
 `github.com/annakonn200059/job-tracker-api`. Postgres via `pgx/v5`, migrations via `goose`.
 
-The project is early-stage. `cmd/api/main.go` wires up `/healthz`, `/readyz`, and the `applications`/`vacancies`
+The project is early-stage. `cmd/api/main.go` wires up `/healthz`, `/readyz`, and the `auth`/`applications`/`vacancies`
 routes; `events`, `companies`, `contacts`, and `tags` have no HTTP surface yet (events/companies only have repos,
 no service; contacts/tags have neither). Check `api/`, `services/`, and `cmd/api/main.go` before assuming a route
 or service method exists.
@@ -80,9 +80,17 @@ helpers every handler uses: `WriteError` (maps an error to a status/JSON body �
 `DecodeJSON` (rejects unknown fields, caps body size), `UserID`, `PathID`, and the `Query*`/`QueryCSV*` family for
 parsing filters. Add new query/body parsing helpers here rather than duplicating them per handler package.
 
-**`http.UserID` is a placeholder, not auth.** It reads the caller's ID straight from an `X-User-ID` header with no
-verification — there is no authentication/session layer in this codebase yet. Do not treat it as an authorization
-boundary; if real auth is added, this is the one place that needs to change for every handler to pick it up.
+**Authentication.** `http.Authenticate` wraps the whole mux: it reads a session token (`Authorization: Bearer`
+first, else the HttpOnly `session` cookie), resolves it via `auth_service.Service.ResolveSession`, and stores the
+user ID in the request context. It never rejects a request itself — public routes (`/auth/*`, health checks) pass
+through — so every protected handler **must** call `apihttp.UserID(r)`, which returns `ErrUnauthorized` (401) when
+there is no valid session. Sessions are opaque random tokens; only their SHA-256 is stored (`sessions` table), so
+logout/revocation is a row delete. `auth_service` handles password auth (bcrypt) and Google sign-in (the frontend
+posts the Google Identity Services ID token to `POST /auth/google`; it is verified with go-oidc against
+`GOOGLE_CLIENT_ID`, and linked via `user_identities` on the stable `sub`, never the email). When Google proves
+ownership of an email whose account was registered with a password but never verified, the password is dropped and
+sessions revoked before linking (pre-account-takeover defence) — keep that invariant if touching
+`LoginWithGoogle`. `CORS_ALLOWED_ORIGINS` must list the frontend origin for cross-origin cookie requests.
 
 **Every domain-specific sentinel error needs an entry in `http.WriteError`'s switch, or it silently becomes a
 500.** Repos translate Postgres constraint violations into distinct sentinel values per domain package (e.g.

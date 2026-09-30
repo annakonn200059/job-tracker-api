@@ -35,21 +35,6 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-// UserID extracts the caller's user ID from the X-User-ID header. This is a
-// placeholder until real authentication exists: the header is trusted
-// as-is, so it must not be treated as an authorization boundary.
-func UserID(r *http.Request) (int64, error) {
-	raw := r.Header.Get("X-User-ID")
-	if raw == "" {
-		return 0, fmt.Errorf("%w: X-User-ID header is required", errors_models.ErrValidation)
-	}
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 {
-		return 0, fmt.Errorf("%w: X-User-ID must be a positive integer", errors_models.ErrValidation)
-	}
-	return id, nil
-}
-
 // PathID parses the {key} path value (set via ServeMux's {key} pattern) as
 // a positive int64.
 func PathID(r *http.Request, key string) (int64, error) {
