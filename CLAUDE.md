@@ -82,9 +82,11 @@ parsing filters. Add new query/body parsing helpers here rather than duplicating
 
 **Authentication.** `http.Authenticate` wraps the whole mux: it reads a session token (`Authorization: Bearer`
 first, else the HttpOnly `session` cookie), resolves it via `auth_service.Service.ResolveSession`, and stores the
-user ID in the request context. It never rejects a request itself — public routes (`/auth/*`, health checks) pass
-through — so every protected handler **must** call `apihttp.UserID(r)`, which returns `ErrUnauthorized` (401) when
-there is no valid session. Sessions are opaque random tokens; only their SHA-256 is stored (`sessions` table), so
+user ID in the request context. Inside it, `http.RequireAuth` is **deny-by-default**: every request without a valid
+session gets 401, except the exact paths in `publicPaths` in `cmd/api/main.go` (health checks, login/register/
+google/logout) and CORS preflights. A new public route must be added to that list; anything else is protected
+automatically. Handlers still get the caller via `apihttp.UserID(r)`. The frontend treats a 401 from any
+non-`/auth/*` call as "logged out" and redirects to the landing page, so keep "not logged in" as 401 (not 403). Sessions are opaque random tokens; only their SHA-256 is stored (`sessions` table), so
 logout/revocation is a row delete. `auth_service` handles password auth (bcrypt) and Google sign-in (the frontend
 posts the Google Identity Services ID token to `POST /auth/google`; it is verified with go-oidc against
 `GOOGLE_CLIENT_ID`, and linked via `user_identities` on the stable `sub`, never the email). When Google proves

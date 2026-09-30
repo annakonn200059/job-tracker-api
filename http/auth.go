@@ -27,9 +27,7 @@ type userIDKey struct{}
 
 // Authenticate resolves the request's session token, if any, and stores the
 // user ID in the request context for UserID to read. It never rejects a
-// request by itself — public routes (login, health checks) pass through —
-// so protected handlers must call UserID, which fails with 401 when no
-// valid session was found.
+// request by itself; RequireAuth, placed inside it, does that.
 func Authenticate(resolver SessionResolver, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := SessionToken(r)
@@ -44,6 +42,28 @@ func Authenticate(resolver SessionResolver, next http.Handler) http.Handler {
 		case errors.Is(err, errors_models.ErrUnauthorized):
 			// Stale token: carry on anonymously.
 		default:
+			WriteError(w, r, err)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireAuth rejects with 401 every request without a valid session,
+// except requests to publicPaths (exact path match) and CORS preflights.
+// Deny-by-default: a newly added route is protected unless it is
+// deliberately listed as public. It must run inside Authenticate.
+func RequireAuth(publicPaths []string, next http.Handler) http.Handler {
+	public := make(map[string]bool, len(publicPaths))
+	for _, p := range publicPaths {
+		public[p] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if public[r.URL.Path] || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, err := UserID(r); err != nil {
 			WriteError(w, r, err)
 			return
 		}

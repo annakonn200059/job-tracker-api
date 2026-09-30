@@ -34,6 +34,18 @@ func main() {
 	}
 }
 
+// publicPaths are reachable without a session; every other route requires
+// one (see apihttp.RequireAuth). Logout is public so a client with an
+// already-expired session can still clear its cookie.
+var publicPaths = []string{
+	"/healthz",
+	"/readyz",
+	"/auth/register",
+	"/auth/login",
+	"/auth/google",
+	"/auth/logout",
+}
+
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -101,7 +113,8 @@ func run() error {
 		Addr: ":" + cfg.HTTPPort,
 		Handler: apihttp.Logging(logger,
 			apihttp.CORS(cfg.CORSAllowedOrigins,
-				apihttp.Authenticate(authService, mux))),
+				apihttp.Authenticate(authService,
+					apihttp.RequireAuth(publicPaths, mux)))),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
