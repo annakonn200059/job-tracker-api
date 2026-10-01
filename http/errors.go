@@ -37,6 +37,9 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		errors.Is(err, auth_models.ErrInvalidGoogleToken):
 		status, code = http.StatusUnauthorized, "unauthorized"
 
+	case errors.Is(err, errors_models.ErrUnsupportedMediaType):
+		status, code = http.StatusUnsupportedMediaType, "unsupported_media_type"
+
 	case errors.Is(err, errors_models.ErrForbidden):
 		status, code = http.StatusForbidden, "forbidden"
 

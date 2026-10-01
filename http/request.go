@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,7 +17,17 @@ const maxBodyBytes = 1 << 20 // 1MB
 // DecodeJSON decodes a JSON request body into dst. It rejects unknown
 // fields and bodies over 1MB, and wraps any failure in ErrValidation so it
 // reaches the caller as 400 rather than 500 once passed to WriteError.
+//
+// It also requires Content-Type: application/json. This is a CSRF defence,
+// not pedantry: a cross-site HTML form can only send form or text/plain
+// bodies without a CORS preflight, and a text/plain body can be shaped
+// into valid JSON — enough to log a victim's browser into an attacker's
+// account via POST /auth/login. A JSON content type forces a preflight,
+// which CORS refuses for origins outside CORS_ALLOWED_ORIGINS.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		return fmt.Errorf("%w: Content-Type must be application/json", errors_models.ErrUnsupportedMediaType)
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
