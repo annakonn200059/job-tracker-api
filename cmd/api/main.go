@@ -11,6 +11,7 @@ import (
 	"time"
 
 	applications_api "github.com/annakonn200059/job-tracker-api/api/applications"
+	auth_api "github.com/annakonn200059/job-tracker-api/api/auth"
 	vacancies_api "github.com/annakonn200059/job-tracker-api/api/vacancies"
 	"github.com/annakonn200059/job-tracker-api/config"
 	apihttp "github.com/annakonn200059/job-tracker-api/http"
@@ -18,8 +19,11 @@ import (
 	applications_repo "github.com/annakonn200059/job-tracker-api/repos/applications"
 	companies_repo "github.com/annakonn200059/job-tracker-api/repos/companies"
 	events_repo "github.com/annakonn200059/job-tracker-api/repos/events"
+	sessions_repo "github.com/annakonn200059/job-tracker-api/repos/sessions"
+	users_repo "github.com/annakonn200059/job-tracker-api/repos/users"
 	vacancies_repo "github.com/annakonn200059/job-tracker-api/repos/vacancies"
 	applications_service "github.com/annakonn200059/job-tracker-api/services/applications"
+	auth_service "github.com/annakonn200059/job-tracker-api/services/auth"
 	vacancies_service "github.com/annakonn200059/job-tracker-api/services/vacancies"
 )
 
@@ -28,6 +32,18 @@ func main() {
 		slog.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+// publicPaths are reachable without a session; every other route requires
+// one (see apihttp.RequireAuth). Logout is public so a client with an
+// already-expired session can still clear its cookie.
+var publicPaths = []string{
+	"/healthz",
+	"/readyz",
+	"/auth/register",
+	"/auth/login",
+	"/auth/google",
+	"/auth/logout",
 }
 
 func run() error {
@@ -66,12 +82,26 @@ func run() error {
 	eventsRepo := events_repo.NewRepo(pool)
 	vacanciesRepo := vacancies_repo.NewRepo(pool)
 	companiesRepo := companies_repo.NewRepo(pool)
+	usersRepo := users_repo.NewRepo(pool)
+	sessionsRepo := sessions_repo.NewRepo(pool)
+
+	var googleVerifier auth_service.GoogleVerifier
+	if cfg.GoogleClientID != "" {
+		googleVerifier = auth_service.NewGoogleVerifier(cfg.GoogleClientID)
+	} else {
+		logger.Warn("GOOGLE_CLIENT_ID not set: Google sign-in disabled")
+	}
 
 	appsService := applications_service.NewService(pool, appsRepo, eventsRepo)
 	vacanciesService := vacancies_service.NewVacanciesService(pool, vacanciesRepo, companiesRepo)
+	authService := auth_service.NewService(pool, usersRepo, sessionsRepo, googleVerifier, cfg.SessionTTL)
 
 	mux := http.NewServeMux()
 
+	auth_api.NewHandler(authService, apihttp.CookieConfig{
+		Secure: cfg.CookieSecure,
+		Domain: cfg.CookieDomain,
+	}).Register(mux)
 	applications_api.NewHandler(appsService).Register(mux)
 	vacancies_api.NewHandler(vacanciesService).Register(mux)
 
@@ -80,8 +110,11 @@ func run() error {
 	mux.HandleFunc("GET /readyz", apihttp.ReadinessHandler(readiness, pool, 2*time.Second))
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.HTTPPort,
-		Handler:           apihttp.Logging(logger, mux),
+		Addr: ":" + cfg.HTTPPort,
+		Handler: apihttp.Logging(logger,
+			apihttp.CORS(cfg.CORSAllowedOrigins,
+				apihttp.Authenticate(authService,
+					apihttp.RequireAuth(publicPaths, mux)))),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,7 +17,17 @@ const maxBodyBytes = 1 << 20 // 1MB
 // DecodeJSON decodes a JSON request body into dst. It rejects unknown
 // fields and bodies over 1MB, and wraps any failure in ErrValidation so it
 // reaches the caller as 400 rather than 500 once passed to WriteError.
+//
+// It also requires Content-Type: application/json. This is a CSRF defence,
+// not pedantry: a cross-site HTML form can only send form or text/plain
+// bodies without a CORS preflight, and a text/plain body can be shaped
+// into valid JSON — enough to log a victim's browser into an attacker's
+// account via POST /auth/login. A JSON content type forces a preflight,
+// which CORS refuses for origins outside CORS_ALLOWED_ORIGINS.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		return fmt.Errorf("%w: Content-Type must be application/json", errors_models.ErrUnsupportedMediaType)
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -33,21 +44,6 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	if v != nil {
 		_ = json.NewEncoder(w).Encode(v)
 	}
-}
-
-// UserID extracts the caller's user ID from the X-User-ID header. This is a
-// placeholder until real authentication exists: the header is trusted
-// as-is, so it must not be treated as an authorization boundary.
-func UserID(r *http.Request) (int64, error) {
-	raw := r.Header.Get("X-User-ID")
-	if raw == "" {
-		return 0, fmt.Errorf("%w: X-User-ID header is required", errors_models.ErrValidation)
-	}
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 {
-		return 0, fmt.Errorf("%w: X-User-ID must be a positive integer", errors_models.ErrValidation)
-	}
-	return id, nil
 }
 
 // PathID parses the {key} path value (set via ServeMux's {key} pattern) as

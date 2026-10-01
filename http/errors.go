@@ -7,8 +7,10 @@ import (
 	"net/http"
 
 	applications_models "github.com/annakonn200059/job-tracker-api/domains/applications"
+	auth_models "github.com/annakonn200059/job-tracker-api/domains/auth"
 	companies_models "github.com/annakonn200059/job-tracker-api/domains/companies"
 	errors_models "github.com/annakonn200059/job-tracker-api/domains/errors"
+	users_models "github.com/annakonn200059/job-tracker-api/domains/users"
 	vacancies_models "github.com/annakonn200059/job-tracker-api/domains/vacancies"
 )
 
@@ -30,13 +32,22 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, errors_models.ErrNotFound):
 		status, code = http.StatusNotFound, "not_found"
 
+	case errors.Is(err, errors_models.ErrUnauthorized),
+		errors.Is(err, auth_models.ErrInvalidCredentials),
+		errors.Is(err, auth_models.ErrInvalidGoogleToken):
+		status, code = http.StatusUnauthorized, "unauthorized"
+
+	case errors.Is(err, errors_models.ErrUnsupportedMediaType):
+		status, code = http.StatusUnsupportedMediaType, "unsupported_media_type"
+
 	case errors.Is(err, errors_models.ErrForbidden):
 		status, code = http.StatusForbidden, "forbidden"
 
 	case errors.Is(err, errors_models.ErrConflict),
 		errors.Is(err, applications_models.ErrAlreadyApplied),
 		errors.Is(err, applications_models.ErrSameStage),
-		errors.Is(err, vacancies_models.ErrHasActiveApplication):
+		errors.Is(err, vacancies_models.ErrHasActiveApplication),
+		errors.Is(err, users_models.ErrEmailTaken):
 		status, code = http.StatusConflict, "conflict"
 
 	case errors.Is(err, errors_models.ErrValidation),
@@ -48,7 +59,11 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		errors.Is(err, vacancies_models.ErrInvalidSalaryPeriod),
 		errors.Is(err, vacancies_models.ErrInvalidSalaryRange),
 		errors.Is(err, vacancies_models.ErrInvalidSort),
-		errors.Is(err, companies_models.ErrNameRequired):
+		errors.Is(err, companies_models.ErrNameRequired),
+		errors.Is(err, users_models.ErrInvalidEmail),
+		errors.Is(err, auth_models.ErrPasswordTooShort),
+		errors.Is(err, auth_models.ErrPasswordTooLong),
+		errors.Is(err, auth_models.ErrGoogleEmailUnverified):
 		status, code = http.StatusBadRequest, "validation_failed"
 	}
 
