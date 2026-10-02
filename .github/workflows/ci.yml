@@ -12,4 +12,4 @@ jobs:
   ci:
     uses: annakonn200059/job-tracker-ci/.github/workflows/go.yml@main
     with:
-      go-version: "1.24"
+      go-version: "1.26.7"
