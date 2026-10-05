@@ -2,6 +2,7 @@ package vacancies_api_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,8 +43,15 @@ func (f *fakeService) Create(_ context.Context, p vacancies_service.CreateParams
 	return f.vacancy, f.err
 }
 
-func (f *fakeService) Update(context.Context, *vacancies_models.Vacancy) (*vacancies_models.Vacancy, error) {
-	return f.vacancy, f.err
+// Update runs apply on a copy of vacancy, as the real service does on the
+// locked row.
+func (f *fakeService) Update(_ context.Context, _, _ int64, apply func(*vacancies_models.Vacancy)) (*vacancies_models.Vacancy, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	v := *f.vacancy
+	apply(&v)
+	return &v, nil
 }
 
 func (f *fakeService) Delete(context.Context, int64, int64) error  { return f.err }
@@ -189,6 +197,57 @@ func TestCreateVacancy(t *testing.T) {
 		}
 		if svc.gotCreate != nil {
 			t.Error("service Create was called without a session")
+		}
+	})
+}
+
+func TestUpdateVacancy(t *testing.T) {
+	t.Run("merge patch", func(t *testing.T) {
+		svc := &fakeService{vacancy: fullVacancy()}
+		// title set, location cleared, everything else left out.
+		body := `{"title": "Senior Backend Engineer", "location": null}`
+
+		rec := contracttest.Do(t, newServer(svc), request(http.MethodPatch, "/vacancies/7", body, true))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["title"] != "Senior Backend Engineer" {
+			t.Errorf("title = %v, want the new value", got["title"])
+		}
+		if _, ok := got["location"]; ok {
+			t.Errorf("location = %v, want it cleared", got["location"])
+		}
+		if got["description"] != "Go and Postgres" || got["salary_period"] != "year" {
+			t.Errorf("fields left out of the patch changed: description %v, salary_period %v",
+				got["description"], got["salary_period"])
+		}
+	})
+
+	t.Run("null posted_at clears it", func(t *testing.T) {
+		svc := &fakeService{vacancy: fullVacancy()}
+
+		rec := contracttest.Do(t, newServer(svc), request(http.MethodPatch, "/vacancies/7", `{"posted_at": null}`, true))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), "posted_at") {
+			t.Errorf("posted_at still set: %s", rec.Body)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		svc := &fakeService{err: errors_models.ErrNotFound}
+
+		rec := contracttest.Do(t, newServer(svc), request(http.MethodPatch, "/vacancies/7", `{"title": "x"}`, true))
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNotFound, rec.Body)
 		}
 	})
 }

@@ -23,7 +23,7 @@ type Service interface {
 	List(ctx context.Context, f vacancies_models.Filter) ([]vacancies_models.Vacancy, int64, error)
 	Get(ctx context.Context, userID, id int64) (*vacancies_models.Vacancy, error)
 	Create(ctx context.Context, p vacancies_service.CreateParams) (*vacancies_models.Vacancy, error)
-	Update(ctx context.Context, v *vacancies_models.Vacancy) (*vacancies_models.Vacancy, error)
+	Update(ctx context.Context, userID, id int64, apply func(*vacancies_models.Vacancy)) (*vacancies_models.Vacancy, error)
 	Delete(ctx context.Context, userID, id int64) error
 	Restore(ctx context.Context, userID, id int64) error
 }
@@ -48,6 +48,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 // ------------------------------------------------------------------ wire types
 
+// vacancyRequest is the create body.
 type vacancyRequest struct {
 	CompanyID      *int64                           `json:"company_id"`
 	CompanyName    *string                          `json:"company_name"` // create only; resolved to CompanyID
@@ -87,6 +88,51 @@ func (b vacancyRequest) toVacancy(userID int64) (vacancies_models.Vacancy, error
 		SalaryPeriod:   b.SalaryPeriod,
 		Source:         b.Source,
 		PostedAt:       postedAt,
+	}, nil
+}
+
+// vacancyPatchRequest is the update body, with JSON merge-patch semantics: a
+// field left out is unchanged, null clears it, a value sets it.
+type vacancyPatchRequest struct {
+	CompanyID      apihttp.Optional[*int64]                           `json:"company_id"`
+	Title          apihttp.Optional[string]                           `json:"title"`
+	URL            apihttp.Optional[*string]                          `json:"url"`
+	Description    apihttp.Optional[*string]                          `json:"description"`
+	Location       apihttp.Optional[*string]                          `json:"location"`
+	WorkMode       apihttp.Optional[*vacancies_models.WorkMode]       `json:"work_mode"`
+	EmploymentType apihttp.Optional[*vacancies_models.EmploymentType] `json:"employment_type"`
+	Language       apihttp.Optional[*string]                          `json:"language"`
+	SalaryMin      apihttp.Optional[*int32]                           `json:"salary_min"`
+	SalaryMax      apihttp.Optional[*int32]                           `json:"salary_max"`
+	SalaryCurrency apihttp.Optional[*string]                          `json:"salary_currency"`
+	SalaryPeriod   apihttp.Optional[*vacancies_models.SalaryPeriod]   `json:"salary_period"`
+	Source         apihttp.Optional[*string]                          `json:"source"`
+	PostedAt       apihttp.Optional[*string]                          `json:"posted_at"` // "YYYY-MM-DD"
+}
+
+// toApply parses the body up front, so the returned func can't fail.
+func (b vacancyPatchRequest) toApply() (func(*vacancies_models.Vacancy), error) {
+	postedAt, err := parsePostedAt(b.PostedAt.Value)
+	if err != nil {
+		return nil, err
+	}
+	return func(v *vacancies_models.Vacancy) {
+		b.CompanyID.Apply(&v.CompanyID)
+		b.Title.Apply(&v.Title)
+		b.URL.Apply(&v.URL)
+		b.Description.Apply(&v.Description)
+		b.Location.Apply(&v.Location)
+		b.WorkMode.Apply(&v.WorkMode)
+		b.EmploymentType.Apply(&v.EmploymentType)
+		b.Language.Apply(&v.Language)
+		b.SalaryMin.Apply(&v.SalaryMin)
+		b.SalaryMax.Apply(&v.SalaryMax)
+		b.SalaryCurrency.Apply(&v.SalaryCurrency)
+		b.SalaryPeriod.Apply(&v.SalaryPeriod)
+		b.Source.Apply(&v.Source)
+		if b.PostedAt.Set {
+			v.PostedAt = postedAt
+		}
 	}, nil
 }
 
@@ -257,20 +303,19 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body vacancyRequest
+	var body vacancyPatchRequest
 	if err := apihttp.DecodeJSON(w, r, &body); err != nil {
 		apihttp.WriteError(w, r, err)
 		return
 	}
 
-	vacancy, err := body.toVacancy(userID)
+	apply, err := body.toApply()
 	if err != nil {
 		apihttp.WriteError(w, r, err)
 		return
 	}
-	vacancy.ID = id
 
-	v, err := h.svc.Update(r.Context(), &vacancy)
+	v, err := h.svc.Update(r.Context(), userID, id, apply)
 	if err != nil {
 		apihttp.WriteError(w, r, err)
 		return

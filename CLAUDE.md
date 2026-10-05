@@ -77,8 +77,8 @@ types.
 The `http` package (note: package name `http`, so other packages must import it under an alias, e.g.
 `apihttp "github.com/annakonn200059/job-tracker-api/http"`, to avoid colliding with `net/http`) provides the
 helpers every handler uses: `WriteError` (maps an error to a status/JSON body — see below), `WriteJSON`,
-`DecodeJSON` (rejects unknown fields, caps body size), `UserID`, `PathID`, and the `Query*`/`QueryCSV*` family for
-parsing filters. Add new query/body parsing helpers here rather than duplicating them per handler package.
+`DecodeJSON` (rejects unknown fields, caps body size), `UserID`, `PathID`, the `Query*`/`QueryCSV*` family for
+parsing filters, and `Optional[T]` for PATCH bodies. Add new query/body parsing helpers here rather than duplicating them per handler package.
 
 **Authentication.** `http.Authenticate` wraps the whole mux: it reads a session token (`Authorization: Bearer`
 first, else the HttpOnly `session` cookie), resolves it via `auth_service.Service.ResolveSession`, and stores the
@@ -106,9 +106,10 @@ them. When a new domain error is introduced, add it to the relevant status-code 
 frontend generates its TypeScript types from it. Nothing generates it from Go, so it only stays honest because of
 the contract tests: `api/<name>/contract_test.go` runs the real handlers (behind the real auth middleware, via
 `contracttest.Authenticated`) against a fake service and sends every request through `contracttest.Do`, which
-fails the test if the request or response doesn't match the spec. So far only `GET /vacancies/{id}` and
-`POST /vacancies` are covered. For a handler package to be testable this way, its `NewHandler` takes a small
-`Service` interface rather than the concrete service (see `vacancies_api.Service`).
+fails the test if the request or response doesn't match the spec. So far `GET`/`PATCH /vacancies/{id}`,
+`POST /vacancies`, `PATCH /applications/{id}` and `GET /applications/board` are covered. For a handler package to
+be testable this way, its `NewHandler` takes a small `Service` interface rather than the concrete service (see
+`vacancies_api.Service`, `applications_api.Service`).
 
 When changing an endpoint, change the spec in the same commit. Keep these conventions or the tests stop catching
 drift:
@@ -118,6 +119,12 @@ drift:
 - Test fixtures populate every field (an `omitempty` field left nil never reaches the validator), and request
   bodies send every field the spec allows (so a renamed request tag hits `DecodeJSON`'s unknown-field 400).
 - Tests assert the expected status: a documented error response matches the spec too.
+
+**PATCH is JSON merge-patch**: a field left out is unchanged, `null` clears it, a value sets it. Request DTOs use
+`apihttp.Optional[T]` per field (`Optional[*T]` when it can be cleared; a non-pointer `T` rejects null), and the
+service's `Update(ctx, userID, id, apply func(*Model))` locks the row (`GetByIDForUpdate`), runs `apply`,
+validates and writes back in one transaction — so concurrent edits to different fields don't overwrite each
+other. Don't add full-replace PATCH endpoints.
 
 ### Multi-tenancy
 

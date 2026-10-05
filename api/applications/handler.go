@@ -1,6 +1,7 @@
 package applications_api
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"time"
@@ -10,11 +11,24 @@ import (
 	applications_service "github.com/annakonn200059/job-tracker-api/services/applications"
 )
 
-type Handler struct {
-	svc *applications_service.Service
+// Service is the slice of *applications_service.Service the handlers use. It
+// is an interface so the contract tests can run the handlers against a fake.
+type Service interface {
+	List(ctx context.Context, f applications_models.Filter) ([]applications_models.Application, int64, error)
+	Board(ctx context.Context, userID int64) (applications_service.Board, error)
+	Get(ctx context.Context, userID, id int64) (*applications_models.Application, error)
+	Apply(ctx context.Context, userID, vacancyID int64, stage applications_models.Stage) (*applications_models.Application, error)
+	Update(ctx context.Context, userID, id int64, apply func(*applications_models.Application)) (*applications_models.Application, error)
+	ChangeStage(ctx context.Context, userID, id int64, to applications_models.Stage) (*applications_models.Application, error)
+	MoveCard(ctx context.Context, userID, id int64, stage applications_models.Stage, afterID, beforeID *int64) (*applications_models.Application, error)
+	Delete(ctx context.Context, userID, id int64) error
 }
 
-func NewHandler(svc *applications_service.Service) *Handler {
+type Handler struct {
+	svc Service
+}
+
+func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
 }
 
@@ -39,9 +53,11 @@ type applyRequest struct {
 	Stage     *applications_models.Stage `json:"stage"` // defaults to "saved"
 }
 
+// updateRequest has JSON merge-patch semantics: a field left out is
+// unchanged, null clears notes, a value sets it.
 type updateRequest struct {
-	Priority int16   `json:"priority"`
-	Notes    *string `json:"notes"`
+	Priority apihttp.Optional[int16]   `json:"priority"`
+	Notes    apihttp.Optional[*string] `json:"notes"`
 }
 
 type changeStageRequest struct {
@@ -216,7 +232,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a, err := h.svc.Update(r.Context(), userID, id, body.Priority, body.Notes)
+	a, err := h.svc.Update(r.Context(), userID, id, func(a *applications_models.Application) {
+		body.Priority.Apply(&a.Priority)
+		body.Notes.Apply(&a.Notes)
+	})
 	if err != nil {
 		apihttp.WriteError(w, r, err)
 		return

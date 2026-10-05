@@ -256,7 +256,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VacancyRequest"
+              $ref: "#/components/schemas/VacancyCreate"
       responses:
         "201":
           description: The created vacancy.
@@ -300,16 +300,16 @@ paths:
     patch:
       tags: [vacancies]
       operationId: updateVacancy
-      summary: Replace a vacancy's fields
+      summary: Update some of a vacancy's fields
       description: |
-        Despite the method, this is a full replacement: every field is written,
-        and a field left out is cleared. `company_name` is ignored here.
+        JSON merge-patch semantics: a field left out is unchanged, `null`
+        clears it, a value sets it. `title` can't be cleared.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VacancyRequest"
+              $ref: "#/components/schemas/VacancyPatch"
       responses:
         "200":
           description: The updated vacancy.
@@ -488,8 +488,10 @@ paths:
     patch:
       tags: [applications]
       operationId: updateApplication
-      summary: Set priority and notes
-      description: Both fields are written; an omitted `priority` becomes 0 and an omitted `notes` is cleared.
+      summary: Update priority and/or notes
+      description: |
+        JSON merge-patch semantics: a field left out is unchanged, `null`
+        clears `notes`, a value sets it. `priority` can't be null.
       requestBody:
         required: true
         content:
@@ -751,7 +753,7 @@ components:
       type: string
       enum: [hour, day, month, year]
 
-    VacancyRequest:
+    VacancyCreate:
       type: object
       additionalProperties: false
       required: [title]
@@ -760,7 +762,35 @@ components:
         company_name:
           type: string
           nullable: true
-          description: Create only. Used when `company_id` is not given.
+          description: Used when `company_id` is not given.
+        title: { type: string, minLength: 1 }
+        url: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        location: { type: string, nullable: true }
+        work_mode:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/WorkMode" }]
+          nullable: true
+        employment_type:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/EmploymentType" }]
+          nullable: true
+        language: { type: string, nullable: true }
+        salary_min: { type: integer, format: int32, nullable: true }
+        salary_max: { type: integer, format: int32, nullable: true }
+        salary_currency: { type: string, nullable: true }
+        salary_period:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/SalaryPeriod" }]
+          nullable: true
+        source: { type: string, nullable: true }
+        posted_at: { type: string, format: date, nullable: true }
+
+    VacancyPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        company_id: { type: integer, format: int64, nullable: true }
         title: { type: string, minLength: 1 }
         url: { type: string, nullable: true }
         description: { type: string, nullable: true }
