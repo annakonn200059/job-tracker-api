@@ -67,6 +67,25 @@ func (r *Repo) GetByID(ctx context.Context, userID, id int64) (*vacancies_models
 	return &v, nil
 }
 
+// GetByIDForUpdate locks the row for the duration of the surrounding
+// transaction. Only meaningful on a tx-bound repo.
+func (r *Repo) GetByIDForUpdate(ctx context.Context, userID, id int64) (*vacancies_models.Vacancy, error) {
+	const q = `SELECT ` + columns + `
+		FROM vacancies v
+		WHERE v.id = $1 AND v.user_id = $2 AND v.deleted_at IS NULL
+		FOR UPDATE`
+
+	var v vacancies_models.Vacancy
+	err := scanRow(r.db.QueryRow(ctx, q, id, userID), &v)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperr.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
 var sortSQL = map[vacancies_models.SortField]string{
 	vacancies_models.SortCreatedAt: "v.created_at",
 	vacancies_models.SortUpdatedAt: "v.updated_at",

@@ -20,8 +20,9 @@ go build -o bin/api ./cmd/api   # build (same as `make build`)
 make build                      # -> bin/api
 make run                        # build + run bin/api
 go vet ./...
-go test ./...                   # no tests exist yet; this is the command to use once they do
-go test ./repos/applications -run TestName -v   # single test, once tests exist
+go test ./...
+go test ./api/vacancies -run TestCreateVacancy -v   # single test
+npx @redocly/cli lint api/openapi.yaml               # lint the API spec (config: redocly.yaml)
 ```
 
 Migrations use `goose` (not a Go module dependency — install with
@@ -38,8 +39,7 @@ make migrate-status
 Migrations live in `migrations/`; there is currently one file (`20260819172202_init.sql`) that creates the full
 initial schema.
 
-Config comes entirely from environment variables (see `config/congig.go` — note the filename typo, not
-`config.go`). `DATABASE_URL` is required; everything else has a default. Copy `.env.example` to `.env` for local
+Config comes entirely from environment variables (see `config/config.go`). `DATABASE_URL` is required; everything else has a default. Copy `.env.example` to `.env` for local
 dev (`HTTP_PORT`, `LOG_LEVEL`, and pool tuning vars `DB_MAX_CONNS`, `DB_MIN_CONNS`, `DB_MAX_CONN_LIFETIME`,
 `DB_MAX_CONN_IDLE_TIME`, `DB_CONNECT_TIMEOUT` are all optional).
 
@@ -77,8 +77,8 @@ types.
 The `http` package (note: package name `http`, so other packages must import it under an alias, e.g.
 `apihttp "github.com/annakonn200059/job-tracker-api/http"`, to avoid colliding with `net/http`) provides the
 helpers every handler uses: `WriteError` (maps an error to a status/JSON body — see below), `WriteJSON`,
-`DecodeJSON` (rejects unknown fields, caps body size), `UserID`, `PathID`, and the `Query*`/`QueryCSV*` family for
-parsing filters. Add new query/body parsing helpers here rather than duplicating them per handler package.
+`DecodeJSON` (rejects unknown fields, caps body size), `UserID`, `PathID`, the `Query*`/`QueryCSV*` family for
+parsing filters, and `Optional[T]` for PATCH bodies. Add new query/body parsing helpers here rather than duplicating them per handler package.
 
 **Authentication.** `http.Authenticate` wraps the whole mux: it reads a session token (`Authorization: Bearer`
 first, else the HttpOnly `session` cookie), resolves it via `auth_service.Service.ResolveSession`, and stores the
@@ -99,6 +99,32 @@ sessions revoked before linking (pre-account-takeover defence) — keep that inv
 `applications_models.ErrInvalidStage`, `vacancies_models.ErrHasActiveApplication`) rather than wrapping the
 shared `errors_models.ErrValidation`/`ErrConflict`, so `errors.Is` against the generic sentinels alone won't catch
 them. When a new domain error is introduced, add it to the relevant status-code case in `http/errors.go`.
+
+### API contract (`api/openapi.yaml`)
+
+`api/openapi.yaml` is a **hand-written** OpenAPI 3.0 spec and the source of truth for the HTTP surface; the
+frontend generates its TypeScript types from it. Nothing generates it from Go, so it only stays honest because of
+the contract tests: `api/<name>/contract_test.go` runs the real handlers (behind the real auth middleware, via
+`contracttest.Authenticated`) against a fake service and sends every request through `contracttest.Do`, which
+fails the test if the request or response doesn't match the spec. So far `GET`/`PATCH /vacancies/{id}`,
+`POST /vacancies`, `PATCH /applications/{id}` and `GET /applications/board` are covered. For a handler package to
+be testable this way, its `NewHandler` takes a small `Service` interface rather than the concrete service (see
+`vacancies_api.Service`, `applications_api.Service`).
+
+When changing an endpoint, change the spec in the same commit. Keep these conventions or the tests stop catching
+drift:
+- Every object schema has `additionalProperties: false`, so a renamed/added Go JSON field is reported.
+- Response fields Go always emits are `required`; `omitempty` fields are optional; pointers without `omitempty`
+  are `nullable`.
+- Test fixtures populate every field (an `omitempty` field left nil never reaches the validator), and request
+  bodies send every field the spec allows (so a renamed request tag hits `DecodeJSON`'s unknown-field 400).
+- Tests assert the expected status: a documented error response matches the spec too.
+
+**PATCH is JSON merge-patch**: a field left out is unchanged, `null` clears it, a value sets it. Request DTOs use
+`apihttp.Optional[T]` per field (`Optional[*T]` when it can be cleared; a non-pointer `T` rejects null), and the
+service's `Update(ctx, userID, id, apply func(*Model))` locks the row (`GetByIDForUpdate`), runs `apply`,
+validates and writes back in one transaction — so concurrent edits to different fields don't overwrite each
+other. Don't add full-replace PATCH endpoints.
 
 ### Multi-tenancy
 

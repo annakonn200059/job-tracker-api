@@ -13,3 +13,19 @@ jobs:
     uses: annakonn200059/job-tracker-ci/.github/workflows/go.yml@main
     with:
       go-version: "1.26.7"
+
+  # Fails on an invalid api/openapi.yaml. Whether the handlers match it is
+  # checked by the Go contract tests in the ci job above.
+  openapi-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Lint OpenAPI spec
+        run: npx --yes @redocly/cli@2.58.1 lint api/openapi.yaml

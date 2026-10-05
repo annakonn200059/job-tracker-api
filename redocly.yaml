@@ -1,0 +1,11 @@
+# Lint config for api/openapi.yaml (`npx @redocly/cli lint`).
+extends:
+  - recommended
+
+rules:
+  # The health probes and logout have no client-error responses to document.
+  operation-4xx-response: off
+  # The only server entry is local development.
+  no-server-example.com: off
+  # Private project; no license to declare.
+  info-license: off

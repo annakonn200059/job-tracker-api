@@ -274,8 +274,26 @@ func (s *Service) computeOrder(ctx context.Context, apps *apprepo.Repo, userID i
 	return *prev + (*next-*prev)/2, nil
 }
 
-func (s *Service) Update(ctx context.Context, userID, id int64, priority int16, notes *string) (*applications_models.Application, error) {
-	return s.apps.Update(ctx, userID, id, priority, notes)
+// Update applies a partial change to priority and notes: apply sets the
+// fields the caller sent on the current row, under a row lock, so two
+// concurrent edits to different fields can't overwrite each other.
+func (s *Service) Update(ctx context.Context, userID, id int64, apply func(*applications_models.Application)) (*applications_models.Application, error) {
+	var result *applications_models.Application
+
+	err := database.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		apps := s.apps.WithTx(tx)
+
+		a, err := apps.GetByIDForUpdate(ctx, userID, id)
+		if err != nil {
+			return err
+		}
+		apply(a)
+
+		result, err = apps.Update(ctx, userID, id, a.Priority, a.Notes)
+		return err
+	})
+
+	return result, err
 }
 
 func (s *Service) Delete(ctx context.Context, userID, id int64) error {

@@ -1,0 +1,945 @@
+# Hand-written contract for the job-tracker API. This file is the source of
+# truth: the Go handlers must match it, and the contract tests
+# (api/*/contract_test.go) fail when they don't.
+#
+# Conventions that keep the contract tests meaningful:
+#   - Every object schema sets `additionalProperties: false`, so a renamed or
+#     added Go JSON field is reported instead of silently accepted.
+#   - Response fields Go always emits are `required`. Fields tagged
+#     `omitempty` in Go are optional here; Go pointers without omitempty are
+#     `nullable`.
+openapi: 3.0.3
+
+info:
+  title: Job Tracker API
+  version: 0.1.0
+  description: |
+    Track job applications: vacancies, applications moving through a Kanban
+    pipeline, and the account that owns them.
+
+    Every route requires a session unless it is marked `security: []`. A
+    session is sent either as `Authorization: Bearer <token>` or as the
+    HttpOnly `session` cookie set by the login endpoints. A request without a
+    valid session gets 401, never 403.
+
+    Request bodies must be sent with `Content-Type: application/json`
+    (otherwise 415), must not contain unknown fields (otherwise 400), and are
+    capped at 1MB.
+
+servers:
+  - url: http://localhost:8080
+
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+
+tags:
+  - name: health
+    description: Kubernetes liveness and readiness probes.
+  - name: auth
+    description: Accounts and sessions.
+  - name: vacancies
+    description: Job postings the user is tracking.
+  - name: applications
+    description: Applications to vacancies and the Kanban board they move across.
+
+paths:
+  # ------------------------------------------------------------------ health
+
+  /healthz:
+    get:
+      tags: [health]
+      operationId: liveness
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+
+  /readyz:
+    get:
+      tags: [health]
+      operationId: readiness
+      summary: Readiness probe
+      description: 503 while shutting down or when the database is unreachable.
+      security: []
+      responses:
+        "200":
+          description: Ready to receive traffic.
+        "503":
+          description: Not ready.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # ------------------------------------------------------------------ auth
+
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      summary: Create an account with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/Session"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Log in with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Session"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /auth/google:
+    post:
+      tags: [auth]
+      operationId: loginWithGoogle
+      summary: Log in with a Google Identity Services ID token
+      description: Only mounted when the server has `GOOGLE_CLIENT_ID` set; 404 otherwise.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleLoginRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/Session"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Google sign-in is not configured on this server.
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: End the current session and clear the cookie
+      description: Public, so a client with an expired session can still clear its cookie.
+      security: []
+      responses:
+        "204":
+          description: Logged out.
+
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: me
+      summary: The current user
+      responses:
+        "200":
+          description: The authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ------------------------------------------------------------------ vacancies
+
+  /vacancies:
+    get:
+      tags: [vacancies]
+      operationId: listVacancies
+      summary: List vacancies
+      parameters:
+        - name: company_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: salary_from
+          in: query
+          schema: { type: integer, format: int32 }
+        - name: has_application
+          in: query
+          description: Omit for any, `true` for vacancies with an active application, `false` for those without.
+          schema: { type: boolean }
+        - name: work_mode
+          in: query
+          description: Comma-separated.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/WorkMode" }
+        - name: employment_type
+          in: query
+          description: Comma-separated.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/EmploymentType" }
+        - name: language
+          in: query
+          description: Comma-separated.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string }
+        - name: source
+          in: query
+          description: Comma-separated.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string }
+        - name: q
+          in: query
+          description: Matches title or description.
+          schema: { type: string }
+        - name: sort
+          in: query
+          description: Defaults to `created_at`, newest first.
+          schema:
+            type: string
+            enum: [created_at, updated_at, posted_at, title, salary]
+        - $ref: "#/components/parameters/Desc"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of vacancies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VacancyList"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [vacancies]
+      operationId: createVacancy
+      summary: Create a vacancy
+      description: |
+        `company_name` is resolved to a company (created if it doesn't exist)
+        when `company_id` is not given.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VacancyCreate"
+      responses:
+        "201":
+          description: The created vacancy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vacancy"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: "`company_id` is not one of this user's companies (`error` is `not_found`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /vacancies/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [vacancies]
+      operationId: getVacancy
+      summary: Get a vacancy
+      responses:
+        "200":
+          description: The vacancy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vacancy"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [vacancies]
+      operationId: updateVacancy
+      summary: Update some of a vacancy's fields
+      description: |
+        JSON merge-patch semantics: a field left out is unchanged, `null`
+        clears it, a value sets it. `title` can't be cleared.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VacancyPatch"
+      responses:
+        "200":
+          description: The updated vacancy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vacancy"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+    delete:
+      tags: [vacancies]
+      operationId: deleteVacancy
+      summary: Soft-delete a vacancy
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /vacancies/{id}/restore:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [vacancies]
+      operationId: restoreVacancy
+      summary: Undo a soft delete
+      responses:
+        "204":
+          description: Restored.
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ------------------------------------------------------------------ applications
+
+  /applications:
+    get:
+      tags: [applications]
+      operationId: listApplications
+      summary: List applications
+      parameters:
+        - name: company_id
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: min_priority
+          in: query
+          schema: { type: integer, format: int32, minimum: -32768, maximum: 32767 }
+        - name: vacancy_id
+          in: query
+          description: Comma-separated.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: integer, format: int64 }
+        - name: tag_id
+          in: query
+          description: Comma-separated.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: integer, format: int64 }
+        - name: stage
+          in: query
+          description: Comma-separated.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/Stage" }
+        - name: q
+          in: query
+          description: Matches vacancy title or company name.
+          schema: { type: string }
+        - name: sort
+          in: query
+          description: Defaults to `board`.
+          schema:
+            type: string
+            enum: [board, created_at, updated_at, priority]
+        - $ref: "#/components/parameters/Desc"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of applications.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationList"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [applications]
+      operationId: createApplication
+      summary: Apply to a vacancy
+      description: Adds the card at the bottom of its starting column.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyRequest"
+      responses:
+        "201":
+          description: The created application.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /applications/board:
+    get:
+      tags: [applications]
+      operationId: getBoard
+      summary: Active applications grouped by stage
+      description: A stage with no applications is left out of the object.
+      responses:
+        "200":
+          description: The Kanban board.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Board"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /applications/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [applications]
+      operationId: getApplication
+      summary: Get an application
+      responses:
+        "200":
+          description: The application.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [applications]
+      operationId: updateApplication
+      summary: Update priority and/or notes
+      description: |
+        JSON merge-patch semantics: a field left out is unchanged, `null`
+        clears `notes`, a value sets it. `priority` can't be null.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateApplicationRequest"
+      responses:
+        "200":
+          description: The updated application.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+    delete:
+      tags: [applications]
+      operationId: deleteApplication
+      summary: Soft-delete an application
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /applications/{id}/stage:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    patch:
+      tags: [applications]
+      operationId: changeApplicationStage
+      summary: Move an application to another stage
+      description: Appends the card to the bottom of the target column and records a `stage_change` event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeStageRequest"
+      responses:
+        "200":
+          description: The updated application.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+  /applications/{id}/move:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      tags: [applications]
+      operationId: moveApplication
+      summary: Drag a card on the board
+      description: |
+        Places the card between `after_id` and `before_id` (either may be
+        omitted at a column edge) in `stage`. A change of stage records a
+        `stage_change` event; reordering within a column does not.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveRequest"
+      responses:
+        "200":
+          description: The moved application.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The `token` returned by the login endpoints.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: HttpOnly cookie set by the login endpoints. Browser clients should rely on this.
+
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    Desc:
+      name: desc
+      in: query
+      schema: { type: boolean }
+    Limit:
+      name: limit
+      in: query
+      description: Values outside 1..200 fall back to 50.
+      schema: { type: integer, format: int32 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, format: int32 }
+
+  responses:
+    Session:
+      description: |
+        A new session. The token is also set as the HttpOnly `session` cookie;
+        browser code should rely on the cookie rather than storing the token.
+      headers:
+        Set-Cookie:
+          schema: { type: string }
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Session"
+    ValidationFailed:
+      description: The request is malformed or fails validation (`error` is `validation_failed`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: No valid session, or wrong credentials (`error` is `unauthorized`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: No such resource for this user (`error` is `not_found`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: The request conflicts with current state (`error` is `conflict`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    UnsupportedMediaType:
+      description: The body was not sent as `application/json` (`error` is `unsupported_media_type`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum:
+            - validation_failed
+            - unauthorized
+            - unsupported_media_type
+            - forbidden
+            - not_found
+            - conflict
+            - internal_error
+        message:
+          type: string
+
+    # ---------------------------------------------------------------- auth
+
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+        display_name: { type: string, nullable: true }
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string }
+        password: { type: string }
+
+    GoogleLoginRequest:
+      type: object
+      additionalProperties: false
+      required: [id_token]
+      properties:
+        id_token:
+          type: string
+          description: The `credential` Google Identity Services hands the frontend.
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, display_name, locale, email_verified, has_password]
+      properties:
+        id: { type: integer, format: int64 }
+        email: { type: string }
+        display_name: { type: string, nullable: true }
+        locale: { type: string }
+        email_verified: { type: boolean }
+        has_password:
+          type: boolean
+          description: False for accounts that only sign in with Google.
+
+    Session:
+      type: object
+      additionalProperties: false
+      required: [user, token, expires_at]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        token: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    # ---------------------------------------------------------------- vacancies
+
+    WorkMode:
+      type: string
+      enum: [onsite, hybrid, remote]
+
+    EmploymentType:
+      type: string
+      enum: [full_time, part_time, contract, internship]
+
+    SalaryPeriod:
+      type: string
+      enum: [hour, day, month, year]
+
+    VacancyCreate:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        company_id: { type: integer, format: int64, nullable: true }
+        company_name:
+          type: string
+          nullable: true
+          description: Used when `company_id` is not given.
+        title: { type: string, minLength: 1 }
+        url: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        location: { type: string, nullable: true }
+        work_mode:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/WorkMode" }]
+          nullable: true
+        employment_type:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/EmploymentType" }]
+          nullable: true
+        language: { type: string, nullable: true }
+        salary_min: { type: integer, format: int32, nullable: true }
+        salary_max: { type: integer, format: int32, nullable: true }
+        salary_currency: { type: string, nullable: true }
+        salary_period:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/SalaryPeriod" }]
+          nullable: true
+        source: { type: string, nullable: true }
+        posted_at: { type: string, format: date, nullable: true }
+
+    VacancyPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        company_id: { type: integer, format: int64, nullable: true }
+        title: { type: string, minLength: 1 }
+        url: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        location: { type: string, nullable: true }
+        work_mode:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/WorkMode" }]
+          nullable: true
+        employment_type:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/EmploymentType" }]
+          nullable: true
+        language: { type: string, nullable: true }
+        salary_min: { type: integer, format: int32, nullable: true }
+        salary_max: { type: integer, format: int32, nullable: true }
+        salary_currency: { type: string, nullable: true }
+        salary_period:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/SalaryPeriod" }]
+          nullable: true
+        source: { type: string, nullable: true }
+        posted_at: { type: string, format: date, nullable: true }
+
+    Vacancy:
+      type: object
+      additionalProperties: false
+      required: [id, user_id, title, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: integer, format: int64 }
+        company_id: { type: integer, format: int64 }
+        title: { type: string }
+        url: { type: string }
+        description: { type: string }
+        location: { type: string }
+        work_mode: { $ref: "#/components/schemas/WorkMode" }
+        employment_type: { $ref: "#/components/schemas/EmploymentType" }
+        language: { type: string }
+        salary_min: { type: integer, format: int32 }
+        salary_max: { type: integer, format: int32 }
+        salary_currency: { type: string }
+        salary_period: { $ref: "#/components/schemas/SalaryPeriod" }
+        source: { type: string }
+        posted_at: { type: string, format: date }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    VacancyList:
+      type: object
+      additionalProperties: false
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Vacancy" }
+        total: { type: integer, format: int64 }
+
+    # ---------------------------------------------------------------- applications
+
+    Stage:
+      type: string
+      enum: [saved, applied, screening, interview, final, offer, rejected, withdrawn]
+
+    ApplyRequest:
+      type: object
+      additionalProperties: false
+      required: [vacancy_id]
+      properties:
+        vacancy_id: { type: integer, format: int64 }
+        stage:
+          type: string
+          allOf: [{ $ref: "#/components/schemas/Stage" }]
+          nullable: true
+          description: Defaults to `saved`.
+
+    UpdateApplicationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        priority: { type: integer, format: int32, minimum: -32768, maximum: 32767 }
+        notes: { type: string, nullable: true }
+
+    ChangeStageRequest:
+      type: object
+      additionalProperties: false
+      required: [to]
+      properties:
+        to: { $ref: "#/components/schemas/Stage" }
+
+    MoveRequest:
+      type: object
+      additionalProperties: false
+      required: [stage]
+      properties:
+        stage: { $ref: "#/components/schemas/Stage" }
+        after_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The card that should end up directly above this one.
+        before_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The card that should end up directly below this one.
+
+    Application:
+      type: object
+      additionalProperties: false
+      required: [id, user_id, vacancy_id, stage, board_order, priority, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: integer, format: int64 }
+        vacancy_id: { type: integer, format: int64 }
+        stage: { $ref: "#/components/schemas/Stage" }
+        board_order:
+          type: number
+          format: double
+          description: Sort key within the stage column.
+        priority: { type: integer, format: int32, minimum: -32768, maximum: 32767 }
+        applied_at: { type: string, format: date-time }
+        closed_at: { type: string, format: date-time }
+        notes: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ApplicationList:
+      type: object
+      additionalProperties: false
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Application" }
+        total: { type: integer, format: int64 }
+
+    Board:
+      type: object
+      additionalProperties: false
+      properties:
+        saved: { $ref: "#/components/schemas/ApplicationColumn" }
+        applied: { $ref: "#/components/schemas/ApplicationColumn" }
+        screening: { $ref: "#/components/schemas/ApplicationColumn" }
+        interview: { $ref: "#/components/schemas/ApplicationColumn" }
+        final: { $ref: "#/components/schemas/ApplicationColumn" }
+        offer: { $ref: "#/components/schemas/ApplicationColumn" }
+        rejected: { $ref: "#/components/schemas/ApplicationColumn" }
+        withdrawn: { $ref: "#/components/schemas/ApplicationColumn" }
+
+    ApplicationColumn:
+      type: array
+      items: { $ref: "#/components/schemas/Application" }

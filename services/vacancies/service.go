@@ -79,11 +79,30 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*vacancies_models
 	return &v, nil
 }
 
-func (s *Service) Update(ctx context.Context, v *vacancies_models.Vacancy) (*vacancies_models.Vacancy, error) {
-	if err := v.Validate(); err != nil {
-		return nil, err
-	}
-	return s.vacancies.Update(ctx, v)
+// Update applies a partial change: apply sets the fields the caller sent on
+// the current row, and the result is validated and written back. Reading
+// and writing happen under a row lock in one transaction, so two concurrent
+// edits to different fields can't overwrite each other.
+func (s *Service) Update(ctx context.Context, userID, id int64, apply func(*vacancies_models.Vacancy)) (*vacancies_models.Vacancy, error) {
+	var result *vacancies_models.Vacancy
+
+	err := database.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		vacancies := s.vacancies.WithTx(tx)
+
+		v, err := vacancies.GetByIDForUpdate(ctx, userID, id)
+		if err != nil {
+			return err
+		}
+		apply(v)
+		if err := v.Validate(); err != nil {
+			return err
+		}
+
+		result, err = vacancies.Update(ctx, v)
+		return err
+	})
+
+	return result, err
 }
 
 // Delete refuses while an active application still references the vacancy —
