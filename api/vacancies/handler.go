@@ -1,6 +1,7 @@
 package vacancies_api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,11 +17,22 @@ import (
 // rather than a full RFC3339 timestamp.
 const postedAtLayout = "2006-01-02"
 
-type Handler struct {
-	svc *vacancies_service.Service
+// Service is the slice of *vacancies_service.Service the handlers use. It is
+// an interface so the contract tests can run the handlers against a fake.
+type Service interface {
+	List(ctx context.Context, f vacancies_models.Filter) ([]vacancies_models.Vacancy, int64, error)
+	Get(ctx context.Context, userID, id int64) (*vacancies_models.Vacancy, error)
+	Create(ctx context.Context, p vacancies_service.CreateParams) (*vacancies_models.Vacancy, error)
+	Update(ctx context.Context, v *vacancies_models.Vacancy) (*vacancies_models.Vacancy, error)
+	Delete(ctx context.Context, userID, id int64) error
+	Restore(ctx context.Context, userID, id int64) error
 }
 
-func NewHandler(svc *vacancies_service.Service) *Handler {
+type Handler struct {
+	svc Service
+}
+
+func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
 }
 
