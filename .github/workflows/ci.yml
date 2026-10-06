@@ -4,9 +4,12 @@ on:
   push:
     branches: [main]
 
+# Superseded PR runs are cancelled. Runs on main are not: each one pushes
+# the image for its commit, and cancelling it would leave that commit
+# without an image.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
