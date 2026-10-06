@@ -43,3 +43,4 @@ jobs:
     uses: annakonn200059/job-tracker-ci/.github/workflows/image.yml@main
     with:
       image-name: job-tracker-api
+      trivyignores: .trivyignore
