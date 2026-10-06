@@ -1,0 +1,8 @@
+# Trivy findings accepted for the job-tracker-api image (read by the image
+# job in .github/workflows/ci.yml).
+#
+# One CVE per line, with an expiry so every exception gets revisited:
+#   CVE-XXXX-YYYY exp:YYYY-MM-DD   # <package>, accepted <date> by <who>: <why>
+#
+# Nothing ignored yet. ignore-unfixed is on, so only findings with an
+# available fix fail the build. Prefer upgrading over adding a line here.
