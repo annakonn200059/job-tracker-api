@@ -40,6 +40,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     uses: annakonn200059/job-tracker-ci/.github/workflows/image.yml@main
     with:
       image-name: job-tracker-api
