@@ -13,8 +13,9 @@ concurrency:
 
 jobs:
   ci:
-    uses: annakonn200059/job-tracker-ci/.github/workflows/go.yml@main
+    uses: annakonn200059/job-tracker-ci/.github/workflows/go.yml@v1.0.0
     with:
+      # renovate: datasource=golang-version depName=go
       go-version: "1.26.7"
 
   # Fails on an invalid api/openapi.yaml. Whether the handlers match it is
@@ -23,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # renovate: datasource=npm depName=@redocly/cli
+      REDOCLY_VERSION: "2.58.1"
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +35,7 @@ jobs:
           node-version: "24"
 
       - name: Lint OpenAPI spec
-        run: npx --yes @redocly/cli@2.58.1 lint api/openapi.yaml
+        run: npx --yes "@redocly/cli@${REDOCLY_VERSION}" lint api/openapi.yaml
 
   # Builds and scans the image on every run; the shared workflow pushes it
   # to GHCR only on pushes to main.
@@ -41,7 +45,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
-    uses: annakonn200059/job-tracker-ci/.github/workflows/image.yml@main
+    uses: annakonn200059/job-tracker-ci/.github/workflows/image.yml@v1.0.0
     with:
       image-name: job-tracker-api
       trivyignores: .trivyignore
