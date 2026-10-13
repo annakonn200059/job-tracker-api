@@ -1,9 +1,13 @@
 -include .env
 export
 
-.PHONY: migrate-new migrate-up migrate-down migrate-status build run dev
+.PHONY: migrate-new migrate-up migrate-down migrate-status build run dev tag image import
 
+SHA   := $(shell git rev-parse --short HEAD)
+DIRTY := $(shell git diff --quiet && git diff --cached --quiet || echo "-dirty")
 AIR := $(shell go env GOPATH)/bin/air
+TAG   := $(SHA)$(DIRTY)
+CLUSTER ?= jobtracker
 
 migrate-new:
 	goose -dir migrations create $(name) sql
@@ -25,3 +29,12 @@ run: build
 
 dev:
 	$(AIR)
+
+tag:
+	@echo $(TAG)
+
+image:
+	docker build -t job-tracker-api:$(TAG) .
+
+import: image
+	k3d image import job-tracker-api:$(TAG) -c $(CLUSTER)
