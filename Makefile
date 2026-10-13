@@ -3,7 +3,10 @@ export
 
 .PHONY: migrate-new migrate-up migrate-down migrate-status build run dev
 
+SHA   := $(shell git rev-parse --short HEAD)
+DIRTY := $(shell git diff --quiet && git diff --cached --quiet || echo "-dirty")
 AIR := $(shell go env GOPATH)/bin/air
+TAG   := $(SHA)$(DIRTY)
 
 migrate-new:
 	goose -dir migrations create $(name) sql
@@ -25,3 +28,9 @@ run: build
 
 dev:
 	$(AIR)
+
+tag:
+	@echo $(TAG)
+
+image:
+	docker build -t job-tracker-api:$(TAG) .
