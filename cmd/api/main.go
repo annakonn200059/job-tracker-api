@@ -143,8 +143,9 @@ func run() error {
 		logger.Info("shutdown signal received")
 	}
 
-	// Step 1. Fail readiness. Kubernetes notices on its next probe and starts
-	// removing this pod from Service endpoints.
+	// Step 1. Fail readiness. In Kubernetes the pod is already being removed from
+	// Service endpoints because it is terminating; this covers load balancers
+	// that only see the probe.
 	readiness.Unready()
 	logger.Info("readiness disabled", "wait", cfg.PreShutdownWait.String())
 
