@@ -1,6 +1,6 @@
 module github.com/annakonn200059/job-tracker-api
 
-go 1.26.7
+go 1.27.3
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
