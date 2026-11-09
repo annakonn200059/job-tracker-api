@@ -26,7 +26,7 @@ jobs:
       contents: read
     env:
       # renovate: datasource=npm depName=@redocly/cli
-      REDOCLY_VERSION: "2.72.1"
+      REDOCLY_VERSION: "2.76.0"
     steps:
       - uses: actions/checkout@v4
 
