@@ -16,7 +16,7 @@ jobs:
     uses: annakonn200059/job-tracker-ci/.github/workflows/go.yml@v1.0.0
     with:
       # renovate: datasource=golang-version depName=go
-      go-version: "1.26.7"
+      go-version: "1.27.4"
 
   # Fails on an invalid api/openapi.yaml. Whether the handlers match it is
   # checked by the Go contract tests in the ci job above.
